@@ -10,6 +10,7 @@ export default function PdfReader() {
   const [isParsing, setIsParsing] = useState<boolean>(false);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [selectedVoiceURI, setSelectedVoiceURI] = useState<string>('');
+  const [fileName, setFileName] = useState<string>('');
   const synthRef = useRef<SpeechSynthesis | null>(null);
 
   // Preferred voice names, in order — first match wins. Chrome exposes
@@ -78,8 +79,10 @@ export default function PdfReader() {
       const sentences = fullText.match(/[^.!?]+[.!?]+/g) || [fullText];
       setChunks(sentences);
       setCurrentChunk(0);
+      setFileName(file.name);
     } catch (err) {
       console.error('Failed to parse PDF:', err);
+      setFileName('');
     } finally {
       setIsParsing(false);
     }
@@ -175,8 +178,15 @@ export default function PdfReader() {
         <label htmlFor="pdf-upload" className="cursor-pointer flex flex-col items-center gap-2">
           <Upload className="w-8 h-8 text-indigo-400" />
           <span className="font-medium text-zinc-200">
-            {isParsing ? 'Extracting text...' : 'Upload PDF Document'}
+            {isParsing
+              ? 'Extracting text...'
+              : fileName
+              ? fileName
+              : 'Upload PDF Document'}
           </span>
+          {fileName && !isParsing && (
+            <span className="text-xs text-zinc-500">Click to upload a different file</span>
+          )}
         </label>
       </div>
 
