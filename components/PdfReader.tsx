@@ -11,7 +11,31 @@ export default function PdfReader() {
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [selectedVoiceURI, setSelectedVoiceURI] = useState<string>('');
   const [fileName, setFileName] = useState<string>('');
+  const [speed, setSpeed] = useState<number>(1);
+  const [chunkElapsed, setChunkElapsed] = useState<number>(0);
   const synthRef = useRef<SpeechSynthesis | null>(null);
+
+  // Roughly average spoken-word pace at normal (1x) speed, used to estimate
+  // how long each sentence — and the whole document — will take to read.
+  const WORDS_PER_MINUTE_AT_1X = 150;
+
+  const formatDuration = (totalSeconds: number): string => {
+    const s = Math.max(0, Math.round(totalSeconds));
+    const hours = Math.floor(s / 3600);
+    const minutes = Math.floor((s % 3600) / 60);
+    const seconds = s % 60;
+
+    const parts: string[] = [];
+    if (hours > 0) parts.push(`${hours} ${hours === 1 ? 'hour' : 'hours'}`);
+    if (minutes > 0) parts.push(`${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`);
+    if (seconds > 0 || parts.length === 0) {
+      parts.push(`${seconds} ${seconds === 1 ? 'second' : 'seconds'}`);
+    }
+
+    if (parts.length === 1) return parts[0];
+    if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+    return `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`;
+  };
 
   // Preferred voice names, in order — first match wins. Chrome exposes
   // "Google UK English Male" once its voice list has loaded.
@@ -93,10 +117,39 @@ export default function PdfReader() {
   // instead of a stale closure from when playback started.
   const chunksRef = useRef<string[]>([]);
   const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
+  const speedRef = useRef<number>(1);
   useEffect(() => { chunksRef.current = chunks; }, [chunks]);
   useEffect(() => {
     voiceRef.current = voices.find((v) => v.voiceURI === selectedVoiceURI) ?? null;
   }, [voices, selectedVoiceURI]);
+  useEffect(() => { speedRef.current = speed; }, [speed]);
+
+  // Estimated seconds to speak each sentence at the current speed, based on
+  // its word count. This is what powers the time-based progress display.
+  const chunkDurations = chunks.map((chunk) => {
+    const wordCount = chunk.trim().split(/\s+/).filter(Boolean).length;
+    const secondsAt1x = (wordCount / WORDS_PER_MINUTE_AT_1X) * 60;
+    return secondsAt1x / speed;
+  });
+  const totalDuration = chunkDurations.reduce((sum, d) => sum + d, 0);
+  const elapsedBeforeCurrent = chunkDurations
+    .slice(0, currentChunk)
+    .reduce((sum, d) => sum + d, 0);
+  const elapsedSeconds =
+    elapsedBeforeCurrent + Math.min(chunkElapsed, chunkDurations[currentChunk] ?? 0);
+
+  // Tick the in-chunk elapsed counter once a second while actually playing.
+  useEffect(() => {
+    if (!isPlaying) return;
+    const id = setInterval(() => setChunkElapsed((s) => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [isPlaying]);
+
+  // Reset the in-chunk counter whenever the current sentence changes,
+  // whether from natural progression or a seek.
+  useEffect(() => {
+    setChunkElapsed(0);
+  }, [currentChunk]);
 
   const playChunk = (index: number) => {
     const currentChunks = chunksRef.current;
@@ -109,6 +162,7 @@ export default function PdfReader() {
     const utterance = new SpeechSynthesisUtterance(currentChunks[index]);
 
     if (voiceRef.current) utterance.voice = voiceRef.current;
+    utterance.rate = speedRef.current;
 
     utterance.onend = () => {
       if (index + 1 < currentChunks.length) {
@@ -164,6 +218,18 @@ export default function PdfReader() {
     setIsPlaying(false);
   };
 
+  // Speech rate can't be changed on an utterance that's already speaking, so
+  // when the user drags the speed slider mid-playback we restart just the
+  // current sentence at the new rate rather than waiting for the next one.
+  const handleSpeedChange = (newSpeed: number) => {
+    setSpeed(newSpeed);
+    speedRef.current = newSpeed;
+    if (isPlaying) {
+      synthRef.current?.cancel();
+      playChunk(currentChunk);
+    }
+  };
+
   return (
     <div className="max-w-3xl mx-auto p-6 space-y-6">
       {/* File Upload Zone */}
@@ -208,9 +274,29 @@ export default function PdfReader() {
             </button>
           </div>
 
-          <div className="text-sm text-zinc-400">
-            Chunk {currentChunk + 1} of {chunks.length}
+          <div className="text-sm text-zinc-400 text-right">
+            {formatDuration(elapsedSeconds)} of {formatDuration(totalDuration)}
           </div>
+        </div>
+      )}
+
+      {/* Speed Control */}
+      {chunks.length > 0 && (
+        <div className="flex items-center gap-3 text-sm">
+          <label htmlFor="speed-select" className="text-zinc-400 shrink-0">
+            Speed
+          </label>
+          <input
+            id="speed-select"
+            type="range"
+            min={0.5}
+            max={2}
+            step={0.25}
+            value={speed}
+            onChange={(e) => handleSpeedChange(Number(e.target.value))}
+            className="w-full accent-indigo-500"
+          />
+          <span className="text-zinc-300 w-12 text-right tabular-nums">{speed}x</span>
         </div>
       )}
 
